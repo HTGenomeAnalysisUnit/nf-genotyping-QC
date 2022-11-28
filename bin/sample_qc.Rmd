@@ -1,0 +1,120 @@
+---
+title: "Report: `r params$project`"
+output:
+  rmdformats::robobook:
+    self_contained: true
+    thumbnails: false
+    lightbox: true
+    gallery: false
+    highlight: tango
+params:
+  project: test-gwas
+  date: 2021-08-09
+  sample.het.file: "qc_samples/QC_samples.het.het"
+  sample.miss.file: "qc_samples/QC_samples.miss.imiss"
+  sample.het.min: 0.2
+  sample.het.max: 0.5
+  sample.miss.max: 0.05
+---
+
+```{r echo=F}
+library(ggplot)
+library(data.table)
+library(plotly)
+library(kable)
+```
+
+# Genotyping QC
+
+## QC on samples
+
+```{r echo=F}
+#load data
+het <- read.table(params$sample.het.file, header=T)
+mis <- read.table(params$sample.miss.file, header=T)
+
+#calculate heterozigosity rate
+mishet <- data.frame(
+    FID=het$FID, 
+    IID=het$IID,
+    mis.rate=mis$F_MISS, 
+    het.rate=(het$N.NM - het$O.HOM)/het$N.NM 
+    )
+```
+
+### Summary
+
+```{r echo = T}
+#save filtered individuals to file
+write.table(mishet[mishet$mis.rate > params$sample.miss.max,], 
+  file="samples_fail_mis_qc.txt", 
+  row.names=F, quote=F)
+write.table(mishet[mishet$het.rate < params$sample.het.min | mishet$het.rate > params$sample.het.max,], 
+  file="samples_fail_het_qc.txt", 
+  row.names=F, quote=F)
+
+nfail_miss <- nrow(mishet[mishet$mis.rate > params$sample.miss.max,])
+nfail_het <- nrow(mishet[mishet$het.rate < params$sample.het.min | mishet$het.rate > params$sample.het.max,])
+nfail_total <- nrow(mishet[mishet$mis.rate > params$sample.miss.max | mishet[mishet$het.rate < params$sample.het.min | mishet$het.rate > params$sample.het.max,])
+npass <- nrow(mishet) - c(nfail_miss, nfail_het, nfail_total)
+df <- data.frame(
+  filter=c("Missingness", "Het rate", "Total"),
+  N_samples_pass=npass,
+  N_samples_fail=c(nfail_miss, nfail_het, nfail_total)
+)
+kable(df)
+```
+
+### Missingness vs Het rate
+
+```{r echo=F}
+ggplot(mishet, aes(x=het.rate, y=mis.rate)) +
+  geom_point(size=1) +
+  geom_vline(xintercept=params$sample.miss.max, color="red") +
+  geom_hline(yintercept=c(params$sample.het.min, params$sample.het.max), color="red") +
+  labs(
+    title="Per sample miss vs het rate",
+    x="Proportion of missing genotypes",
+    y="Heterozygosity rate"
+    ) +
+  theme_bw()
+```
+
+### Cumulative plots
+
+#### Missingness
+
+```{r echo=F}
+df <- mishet[order(mishet$mis.rate),]
+df$idx <- seq(1,nrow(df))
+df$cumsum <- cumsum(df$idx) / nrow(df)  
+ggplotly(
+  ggplot(df, aes(x=mis.rate, y=cumsum)) +
+  geom_line() +
+  geom_vline(xintercept=params$sample.miss.max, color="red") +
+  labs(
+    title="Sample missingness",
+    x="Missing rate",
+    y="Fraction of samples with missing > X"
+  ) +
+  theme_bw()
+```
+
+#### Het rate
+
+```{r echo=F}
+df <- mishet[order(mishet$het.rate),]
+df$idx <- seq(1,nrow(df))
+df$cumsum <- cumsum(df$idx) / nrow(df)
+
+ggplotly(
+  ggplot(df, aes(x=het.rate, y=cumsum)) +
+  geom_line() +
+  geom_vline(xintercept=c(params$sample.het.min, params$sample.het.max), color="red") +
+  labs(
+    title="Sample heterozygosity rate",
+    x="Het rate",
+    y="Fraction of samples with het rate > X"
+  ) +
+  theme_bw()
+```
